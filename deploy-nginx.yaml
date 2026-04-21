@@ -1,0 +1,25 @@
+---
+- name: Deployer Nginx
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Mettre à jour le cache APT
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Installer Nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Démarrer et activer Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: je vérifie que nginx est bien launch
+      ansible.builtin.shell: "curl -I http://localhost | grep '200 OK'"
+      register: nginx_status
+      failed_when: nginx_status.rc != 0
