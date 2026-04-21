@@ -17,7 +17,7 @@ provider "ovh" {
 resource "ovh_cloud_project_instance" "vm" {
   service_name = var.project_id
 
-  name       = "aylan-vm-debian"
+  name       = "sayzx-vm-debian"
   region     = "GRA11"
   flavor_name = "d2-2"
 
