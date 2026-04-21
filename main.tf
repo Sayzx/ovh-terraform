@@ -70,7 +70,7 @@ resource "ovh_cloud_project_instance" "vm" {
 
   name        = "sayzx-vm-debian"
   region      = "GRA11"
-  flavor_name = "d2-2"
+  flavor_name = "c2-30"
   image_name  = "Debian 12"
 
   security_groups = [
