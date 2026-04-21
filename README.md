@@ -1,25 +1,29 @@
-# Terraform OVH - Infrastructure Web
+# Terraform AWS - Infrastructure Web
 
-Projet d'infrastructure Infrastructure-as-Code (IaC) utilisant Terraform pour provisionner une VM sur OVH avec Nginx.
+Projet d'infrastructure Infrastructure-as-Code (IaC) utilisant Terraform pour provisionner une VM sur AWS avec Nginx.
 
 ## 📋 Architecture
 
 Le projet déploie :
-- **VPC privé** (`vpc-main`) dans le datacenter de Gravelines (GRA11)
-- **Subnet privé** avec DHCP (`10.0.1.0/24`)
+- **VPC** (`10.0.0.0/16`) dans la région eu-west-1 (Irlande)
+- **Subnet public** (`10.0.1.0/24`) avec auto-assignation d'IP publique
+- **Internet Gateway** pour l'accès public
+- **Route Table** dirigeant le trafic vers l'IGW
 - **Security Group** permettant SSH et HTTP
-- **VM Debian 12** (2 vCPU, 2 GB RAM) 
-- **IP publique** pour accéder à la VM
+- **Instance EC2 t3.small** (2 vCPU, 2 GB RAM) avec Debian 12
+- **Elastic IP** pour un accès stable à la VM
 
 ```
 ┌─────────────────────────────────┐
-│    OVH Cloud Project            │
+│    AWS VPC (eu-west-1)          │
 ├─────────────────────────────────┤
-│  VPC (vpc-main)                 │
-│  ├─ Subnet (10.0.1.0/24)        │
-│  │  └─ VM (sayzx-vm-debian)     │
-│  │     └─ IP Publique           │
-│  └─ Security Group (web-sg)     │
+│  VPC (10.0.0.0/16)              │
+│  ├─ Internet Gateway            │
+│  ├─ Route Table                 │
+│  └─ Subnet Public (10.0.1.0/24) │
+│     └─ EC2 Instance             │
+│        └─ Elastic IP            │
+│  └─ Security Group              │
 │     ├─ SSH (port 22)            │
 │     └─ HTTP (port 80)           │
 └─────────────────────────────────┘
@@ -30,20 +34,17 @@ Le projet déploie :
 ### Prérequis
 
 - [Terraform](https://www.terraform.io/downloads) (>= 1.0)
-- Compte OVH avec les clés d'authentification (Application Key, Secret, Consumer Key)
+- [AWS CLI](https://aws.amazon.com/cli/) configurée avec les credentials
+- Paire de clés SSH créée dans AWS EC2
 - [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) (optionnel, pour Nginx)
-- Clé SSH générée dans OVH
 
 ### 1. Configuration
 
 Créer un fichier `terraform.tfvars` :
 
 ```hcl
-ovh_application_key    = "votre_application_key"
-ovh_application_secret = "votre_application_secret"
-consumer_key           = "votre_consumer_key"
-project_id             = "votre_project_id_ovh"
-ssh_key_name           = "nom_de_votre_clé_ssh"
+aws_region    = "eu-west-1"
+ssh_key_name  = "nom_de_votre_clé_aws"
 ```
 
 ### 2. Initialisation
@@ -69,7 +70,7 @@ terraform apply
 
 ```
 .
-├── main.tf              # Ressources principales (VPC, VM, sécurité)
+├── main.tf              # Ressources principales (VPC, EC2, sécurité)
 ├── variables.tf         # Déclaration des variables
 ├── terraform.tfvars     # Valeurs des variables (à créer)
 ├── deploy-nginx.yaml    # Playbook Ansible pour Nginx
@@ -80,21 +81,18 @@ terraform apply
 
 ### `main.tf`
 
-Contient la définition de l'infrastructure :
-- Configuration du provider OVH
-- Ressources réseau (VPC, subnet)
+Contient la définition de l'infrastructure AWS :
+- Configuration du provider AWS
+- Ressources réseau (VPC, Subnet, IGW, Route Table)
 - Groupe de sécurité et ses règles
-- Instance VM
-- Allocation IP publique
+- Instance EC2 avec récupération dynamique de l'AMI Debian
+- Allocation Elastic IP
 
 ### `variables.tf`
 
 Définit les variables nécessaires :
-- `ovh_application_key` - Clé d'authentification OVH
-- `ovh_application_secret` - Secret OVH
-- `consumer_key` - Clé consommateur OVH
-- `project_id` - ID du projet OVH
-- `ssh_key_name` - Nom de la clé SSH OVH
+- `aws_region` - Région AWS (défaut: eu-west-1)
+- `ssh_key_name` - Nom de la paire de clés SSH AWS
 
 ## 🎯 Opérations courantes
 
@@ -103,6 +101,12 @@ Définit les variables nécessaires :
 ```bash
 terraform show
 terraform state list
+```
+
+### Récupérer les outputs
+
+```bash
+terraform output
 ```
 
 ### Rafraîchir l'infrastructure (sans changement)
@@ -126,14 +130,14 @@ terraform apply
 
 ## 🐧 Déployer Nginx (optionnel)
 
-Une fois la VM créée, utiliser le playbook Ansible :
+Une fois l'instance EC2 créée, utiliser le playbook Ansible :
 
 ```bash
-# Récupérer l'IP de la VM depuis Terraform
-INSTANCE_IP=$(terraform output -raw instance_ip)
+# Récupérer l'IP publique de l'instance
+INSTANCE_IP=$(terraform output -raw instance_public_ip)
 
 # Exécuter le playbook Ansible
-ansible-playbook -i "$INSTANCE_IP," deploy-nginx.yaml -u debian --private-key ~/.ssh/your_key
+ansible-playbook -i "$INSTANCE_IP," deploy-nginx.yaml -u admin --private-key ~/.ssh/your_aws_key
 ```
 
 Le playbook va :
@@ -146,33 +150,56 @@ Le playbook va :
 
 ⚠️ **À faire absolument** :
 - Restreindre SSH (port 22) à votre IP au lieu de `0.0.0.0/0`
-- Utiliser un fichier `.tfvars` pour les secrets (jamais en Git)
-- Activer HTTPS avec un certificat SSL
-- Renforcer les règles de sécurité en production
+- Utiliser AWS Secrets Manager pour les données sensibles
+- Activer HTTPS avec un certificat SSL (ACM)
+- Utiliser un Network ACL restrictif en production
+- Mettre en place du logging CloudTrail
+- Chiffrer les volumes EBS
 
 ## 🐛 Dépannage
 
-### Erreur d'authentification OVH
-Vérifier que les clés OVH sont correctes et que le `consumer_key` n'a pas expiré.
+### AWS credentials non trouvées
+Vérifier que AWS CLI est configurée :
+```bash
+aws sts get-caller-identity
+```
 
-### VM ne démarre pas
-Vérifier que la clé SSH existe bien dans OVH et que le nom correspond à `ssh_key_name`.
+### Instance ne démarre pas
+Vérifier que :
+- La paire de clés SSH existe dans la région AWS
+- Le nom correspond exactement à `ssh_key_name`
+- L'AMI Debian 12 est disponible dans la région
+
+### Impossible de se connecter via SSH
+```bash
+aws ec2 describe-security-groups --group-ids sg-xxxxx
+ssh -i ~/your_key.pem admin@<public_ip>
+```
 
 ### Ansible timeout
-S'assurer que la VM a eu le temps de démarrer et que l'IP publique est assignée.
+S'assurer que l'Elastic IP est bien assignée et que l'instance a eu le temps de démarrer.
 
 ## 📊 Outputs
 
-Pour récupérer les informations de la VM :
+Les outputs disponibles après `terraform apply` :
 
-```bash
-terraform output
 ```
+instance_public_ip  = Elastic IP de l'instance
+instance_id         = ID de l'instance EC2
+vpc_id              = ID du VPC
+```
+
+## 💰 Coûts estimés
+
+- **EC2 t3.small** : ~$0.0104/heure
+- **Elastic IP** : Gratuit (si associée) / $0.005/heure (si non utilisée)
+- **Data transfer** : Gratuit (ingress) / ~$0.02/GB (egress)
 
 ## 📚 Ressources
 
-- [Documentation Terraform OVH Provider](https://registry.terraform.io/providers/ovh/ovh/latest/docs)
-- [Documentation OVH Cloud](https://docs.ovh.com/en/cloud/)
+- [Documentation Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [Documentation AWS EC2](https://docs.aws.amazon.com/ec2/index.html)
+- [Guide AWS VPC](https://docs.aws.amazon.com/vpc/latest/userguide/)
 - [Ansible Documentation](https://docs.ansible.com/)
 
 ## 👤 Auteur
@@ -180,5 +207,7 @@ terraform output
 **sayzx**
 
 ---
+
+**Branche AWS** - Pour la version OVH, voir la branche `master`
 
 *Dernière mise à jour : avril 2026*

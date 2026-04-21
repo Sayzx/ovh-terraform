@@ -1,88 +1,186 @@
 terraform {
   required_providers {
-    ovh = {
-      source  = "ovh/ovh"
-      version = "~> 0.40"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
     }
   }
 }
 
-provider "ovh" {
-  endpoint           = "ovh-eu"
-  application_key    = var.ovh_application_key
-  application_secret = var.ovh_application_secret
-  consumer_key       = var.ovh_consumer_key
+provider "aws" {
+  region = var.aws_region
 }
 
-# NETWORK 
+# ========================================
+# INFRASTRUCTURE RÉSEAU
+# ========================================
 
-resource "ovh_cloud_project_network_private" "vpc" {
-  service_name = var.project_id
-  name         = "vpc-main"
-  regions      = ["GRA11"]
+# VPC isolé pour nos ressources
+resource "aws_vpc" "vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "vpc-main"
+  }
 }
 
-resource "ovh_cloud_project_network_private_subnet" "subnet" {
-  service_name = var.project_id
-  network_id   = ovh_cloud_project_network_private.vpc.id
+# Subnet public avec auto-assignation d'IP publique
+resource "aws_subnet" "subnet" {
+  vpc_id              = aws_vpc.vpc.id
+  cidr_block          = "10.0.1.0/24"
+  availability_zone   = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
 
-  region  = "GRA11"
-  network = "10.0.1.0/24"
-  start   = "10.0.1.0/24"
-  dhcp    = true
+  tags = {
+    Name = "subnet-main"
+  }
 }
 
-# SECURITY GROUP
+# Internet Gateway pour l'accès public
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.vpc.id
 
-resource "ovh_cloud_project_security_group" "sg" {
-  service_name = var.project_id
-  name         = "web-sg"
-  description  = "Allow SSH and HTTP"
+  tags = {
+    Name = "igw-main"
+  }
 }
 
-resource "ovh_cloud_project_security_group_rule" "ssh" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
+# Route table pour diriger le trafic vers l'IGW
+resource "aws_route_table" "rt" {
+  vpc_id = aws_vpc.vpc.id
 
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "22"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+  route {
+    cidr_block      = "0.0.0.0/0"
+    gateway_id      = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Name = "rt-main"
+  }
 }
 
-resource "ovh_cloud_project_security_group_rule" "http" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
-
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "80"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+# Association de la route table au subnet
+resource "aws_route_table_association" "rta" {
+  subnet_id      = aws_subnet.subnet.id
+  route_table_id = aws_route_table.rt.id
 }
 
+# ========================================
+# GROUPE DE SÉCURITÉ (Firewall)
+# ========================================
 
-# INSTANCE (EC2 équivalent)
+# Groupe de sécurité permettant SSH et HTTP
+resource "aws_security_group" "web_sg" {
+  name        = "web-sg"
+  description = "Accès SSH et HTTP publics"
+  vpc_id      = aws_vpc.vpc.id
 
-resource "ovh_cloud_project_instance" "vm" {
-  service_name = var.project_id
-
-  name        = "sayzx-vm-debian"
-  region      = "GRA11"
-  flavor_name = "d2-2"
-  image_name  = "Debian 12"
-
-  security_groups = [
-    ovh_cloud_project_security_group.sg.name
-  ]
-
-  ssh_key_name = var.ssh_key_name
+  tags = {
+    Name = "web-sg"
+  }
 }
 
-# PUBLIC IP
+# Ingress SSH depuis anywhere (à restreindre en prod)
+resource "aws_security_group_rule" "ssh" {
+  type              = "ingress"
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.web_sg.id
+}
 
-resource "ovh_cloud_project_instance_ip" "ip" {
-  service_name = var.project_id
-  instance_id  = ovh_cloud_project_instance.vm.id
+# Ingress HTTP
+resource "aws_security_group_rule" "http" {
+  type              = "ingress"
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.web_sg.id
+}
+
+# Egress permettant tout le trafic sortant
+resource "aws_security_group_rule" "egress" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.web_sg.id
+}
+
+# ========================================
+# SERVEUR VIRTUEL (EC2)
+# ========================================
+
+# Data source pour récupérer les zones de disponibilité
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# AMI Debian 12 la plus récente
+data "aws_ami" "debian" {
+  most_recent = true
+  owners      = ["379101102735"] # Debian
+
+  filter {
+    name   = "name"
+    values = ["debian-12-amd64-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+# Instance EC2 Debian 12 avec 2 vCPU et 2GB RAM
+resource "aws_instance" "vm" {
+  ami                    = data.aws_ami.debian.id
+  instance_type          = "t3.small" # 2 vCPU, 2 GB RAM
+  subnet_id              = aws_subnet.subnet.id
+  vpc_security_group_ids = [aws_security_group.web_sg.id]
+  key_name               = var.ssh_key_name
+
+  tags = {
+    Name = "sayzx-vm-debian"
+  }
+}
+
+# ========================================
+# ADRESSE IP PUBLIQUE (Elastic IP)
+# ========================================
+
+# Association d'une Elastic IP pour accéder à la VM depuis internet
+resource "aws_eip" "ip" {
+  instance = aws_instance.vm.id
+  domain   = "vpc"
+
+  tags = {
+    Name = "eip-main"
+  }
+
+  depends_on = [aws_internet_gateway.igw]
+}
+
+# ========================================
+# OUTPUTS
+# ========================================
+
+output "instance_public_ip" {
+  value       = aws_eip.ip.public_ip
+  description = "IP publique de l'instance EC2"
+}
+
+output "instance_id" {
+  value       = aws_instance.vm.id
+  description = "ID de l'instance EC2"
+}
+
+output "vpc_id" {
+  value       = aws_vpc.vpc.id
+  description = "ID du VPC"
 }
