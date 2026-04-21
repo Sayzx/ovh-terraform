@@ -1,15 +1,15 @@
 # Terraform OVH - Infrastructure Web
 
-Projet d'infrastructure Infrastructure-as-Code (IaC) utilisant Terraform pour provisionner une VM sur OVH avec Nginx.
+Projet d'infrastructure Infrastructure-as-Code (IaC) utilisant Terraform pour provisionner une VM sur OVHcloud Public Cloud avec Nginx.
 
 ## 📋 Architecture
 
 Le projet déploie :
-- **VPC privé** (`vpc-main`) dans le datacenter de Gravelines (GRA11)
-- **Subnet privé** avec DHCP (`10.0.1.0/24`)
-- **Security Group** permettant SSH et HTTP
-- **VM Debian 12** (2 vCPU, 2 GB RAM) 
-- **IP publique** pour accéder à la VM
+- **Réseau privé OVHcloud** (`vpc-main`) en `GRA11`
+- **Sous-réseau privé** (`10.0.1.0/24`) avec DHCP
+- **Security Group OpenStack** (SSH + HTTP)
+- **VM Debian 12** (flavor `c2-30`)
+- **Floating IP publique** pour accéder à la VM
 
 ```
 ┌─────────────────────────────────┐
@@ -30,7 +30,8 @@ Le projet déploie :
 ### Prérequis
 
 - [Terraform](https://www.terraform.io/downloads) (>= 1.0)
-- Compte OVH avec les clés d'authentification (Application Key, Secret, Consumer Key)
+- Compte OVH avec les clés d'authentification OVH API (Application Key, Secret, Consumer Key)
+- Accès OpenStack initialisé (variables `OS_*` via fichier OpenRC)
 - [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html) (optionnel, pour Nginx)
 - Clé SSH générée dans OVH
 
@@ -41,9 +42,11 @@ Créer un fichier `terraform.tfvars` :
 ```hcl
 ovh_application_key    = "votre_application_key"
 ovh_application_secret = "votre_application_secret"
-consumer_key           = "votre_consumer_key"
+ovh_consumer_key       = "votre_consumer_key"
 project_id             = "votre_project_id_ovh"
 ssh_key_name           = "nom_de_votre_clé_ssh"
+region                 = "GRA11"
+public_network_name    = "Ext-Net"
 ```
 
 ### 2. Initialisation
@@ -81,9 +84,9 @@ terraform apply
 ### `main.tf`
 
 Contient la définition de l'infrastructure :
-- Configuration du provider OVH
+- Provider **OVH** (réseau privé)
+- Provider **OpenStack** (instance, security group, floating IP)
 - Ressources réseau (VPC, subnet)
-- Groupe de sécurité et ses règles
 - Instance VM
 - Allocation IP publique
 
@@ -92,7 +95,7 @@ Contient la définition de l'infrastructure :
 Définit les variables nécessaires :
 - `ovh_application_key` - Clé d'authentification OVH
 - `ovh_application_secret` - Secret OVH
-- `consumer_key` - Clé consommateur OVH
+- `ovh_consumer_key` - Clé consommateur OVH
 - `project_id` - ID du projet OVH
 - `ssh_key_name` - Nom de la clé SSH OVH
 
@@ -130,7 +133,7 @@ Une fois la VM créée, utiliser le playbook Ansible :
 
 ```bash
 # Récupérer l'IP de la VM depuis Terraform
-INSTANCE_IP=$(terraform output -raw instance_ip)
+INSTANCE_IP=$(terraform output -raw instance_public_ip)
 
 # Exécuter le playbook Ansible
 ansible-playbook -i "$INSTANCE_IP," deploy-nginx.yaml -u debian --private-key ~/.ssh/your_key
@@ -152,8 +155,9 @@ Le playbook va :
 
 ## 🐛 Dépannage
 
-### Erreur d'authentification OVH
-Vérifier que les clés OVH sont correctes et que le `consumer_key` n'a pas expiré.
+### Erreur d'authentification OVH/OpenStack
+Vérifier que les clés OVH sont correctes et que le `ovh_consumer_key` n'a pas expiré.
+Vérifier aussi que les variables OpenStack (`OS_AUTH_URL`, `OS_USERNAME`, `OS_PASSWORD`, `OS_PROJECT_ID`, etc.) sont chargées.
 
 ### VM ne démarre pas
 Vérifier que la clé SSH existe bien dans OVH et que le nom correspond à `ssh_key_name`.

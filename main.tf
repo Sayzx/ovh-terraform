@@ -1,10 +1,21 @@
 terraform {
+  required_version = ">= 1.0.0"
+
   required_providers {
+    openstack = {
+      source  = "terraform-provider-openstack/openstack"
+      version = ">= 3.0.0"
+    }
+
     ovh = {
       source  = "ovh/ovh"
       version = "~> 0.40"
     }
   }
+}
+
+provider "openstack" {
+  region = var.region
 }
 
 provider "ovh" {
@@ -14,75 +25,93 @@ provider "ovh" {
   consumer_key       = var.ovh_consumer_key
 }
 
+locals {
+  service_name = var.project_id
+}
+
 # NETWORK 
 
 resource "ovh_cloud_project_network_private" "vpc" {
-  service_name = var.project_id
-  name         = "vpc-main"
-  regions      = ["GRA11"]
+  service_name = local.service_name
+  name         = var.private_network_name
+  regions      = [var.region]
 }
 
 resource "ovh_cloud_project_network_private_subnet" "subnet" {
-  service_name = var.project_id
+  service_name = local.service_name
   network_id   = ovh_cloud_project_network_private.vpc.id
 
-  region  = "GRA11"
-  network = "10.0.1.0/24"
-  start   = "10.0.1.0/24"
-  dhcp    = true
+  region     = var.region
+  network    = var.private_subnet_cidr
+  start      = var.private_subnet_start_ip
+  end        = var.private_subnet_end_ip
+  dhcp       = true
+  no_gateway = true
 }
 
 # SECURITY GROUP
 
-resource "ovh_cloud_project_security_group" "sg" {
-  service_name = var.project_id
-  name         = "web-sg"
+resource "openstack_networking_secgroup_v2" "sg" {
+  name         = var.security_group_name
   description  = "Allow SSH and HTTP"
 }
 
-resource "ovh_cloud_project_security_group_rule" "ssh" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
-
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "22"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+resource "openstack_networking_secgroup_rule_v2" "ssh" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 22
+  port_range_max    = 22
+  remote_ip_prefix  = var.ssh_allowed_cidr
+  security_group_id = openstack_networking_secgroup_v2.sg.id
 }
 
-resource "ovh_cloud_project_security_group_rule" "http" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
-
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "80"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+resource "openstack_networking_secgroup_rule_v2" "http" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 80
+  port_range_max    = 80
+  remote_ip_prefix  = "0.0.0.0/0"
+  security_group_id = openstack_networking_secgroup_v2.sg.id
 }
 
 
 # INSTANCE (EC2 équivalent)
 
-resource "ovh_cloud_project_instance" "vm" {
-  service_name = var.project_id
-
-  name        = "sayzx-vm-debian"
-  region      = "GRA11"
-  flavor_name = "c2-30"
-  image_name  = "Debian 12"
+resource "openstack_compute_instance_v2" "vm" {
+  name        = var.instance_name
+  flavor_name = var.flavor_name
+  image_name  = var.image_name
+  key_pair    = var.ssh_key_name
 
   security_groups = [
-    ovh_cloud_project_security_group.sg.name
+    openstack_networking_secgroup_v2.sg.name
   ]
 
-  ssh_key_name = var.ssh_key_name
+  network {
+    name = var.public_network_name
+  }
+
+  network {
+    name = ovh_cloud_project_network_private.vpc.name
+  }
+
+  lifecycle {
+    # Recommended by OVH docs: avoid drift when base image labels evolve.
+    ignore_changes = [image_name]
+  }
+
+  depends_on = [ovh_cloud_project_network_private_subnet.subnet]
 }
 
 # PUBLIC IP
 
-resource "ovh_cloud_project_instance_ip" "ip" {
-  service_name = var.project_id
-  instance_id  = ovh_cloud_project_instance.vm.id
+resource "openstack_networking_floatingip_v2" "ip" {
+  pool = var.public_network_name
+}
+
+resource "openstack_networking_floatingip_associate_v2" "ip_assoc" {
+  floating_ip = openstack_networking_floatingip_v2.ip.address
+  port_id     = openstack_compute_instance_v2.vm.network.0.port
 }
