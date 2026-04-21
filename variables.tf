@@ -1,41 +1,31 @@
-variable "ovh_application_key" {
-	description = "OVH API application key"
-	type        = string
-	sensitive   = true
-}
-
-variable "ovh_application_secret" {
-	description = "OVH API application secret"
-	type        = string
-	sensitive   = true
-}
-
-variable "ovh_consumer_key" {
-	description = "OVH API consumer key"
-	type        = string
-	sensitive   = true
-}
-
-variable "project_id" {
-	description = "OVH Public Cloud project ID (service_name)"
-	type        = string
-}
-
-variable "ssh_key_name" {
-	description = "Existing OVH SSH key name"
-	type        = string
-}
-
 variable "region" {
-	description = "OVH region used for network and instance"
+	description = "OpenStack region used for the instance"
 	type        = string
-	default     = "GRA11"
+	default     = "GRA9"
+}
+
+variable "openstack_auth_url" {
+	description = "OpenStack authentication URL for OVH Public Cloud"
+	type        = string
+	default     = "https://auth.cloud.ovh.net/v3/"
 }
 
 variable "public_network_name" {
 	description = "OpenStack public network pool name"
 	type        = string
 	default     = "Ext-Net"
+}
+
+variable "keypair_name" {
+	description = "Name of the OpenStack SSH keypair to create"
+	type        = string
+	default     = "sayzx"
+}
+
+variable "public_key_path" {
+	description = "Path to the local SSH public key"
+	type        = string
+	default     = "~/.ssh/id_ed25519.pub"
 }
 
 variable "instance_name" {
@@ -54,36 +44,6 @@ variable "image_name" {
 	description = "Image name used to create the instance"
 	type        = string
 	default     = "Debian 12"
-}
-
-variable "private_network_name" {
-	description = "Private network name"
-	type        = string
-	default     = "vpc-main"
-}
-
-variable "private_subnet_cidr" {
-	description = "Private subnet CIDR"
-	type        = string
-	default     = "10.0.1.0/24"
-}
-
-variable "private_subnet_start_ip" {
-	description = "First DHCP IP in subnet"
-	type        = string
-	default     = "10.0.1.10"
-}
-
-variable "private_subnet_end_ip" {
-	description = "Last DHCP IP in subnet"
-	type        = string
-	default     = "10.0.1.200"
-}
-
-variable "security_group_name" {
-	description = "Security group name"
-	type        = string
-	default     = "web-sg"
 }
 
 variable "ssh_allowed_cidr" {
