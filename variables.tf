@@ -1,5 +1,18 @@
-variable "ovh_application_key" {}
-variable "ovh_application_secret" {}
-variable "consumer_key" {}
-variable "project_id" {}
-variable "ssh_key_name" {}
+# ID du souscription Azure
+variable "subscription_id" {
+  type        = string
+  description = "ID de la souscription Azure"
+}
+
+# Région Azure
+variable "azure_region" {
+  type        = string
+  description = "Région Azure pour déployer l'infrastructure"
+  default     = "West Europe"
+}
+
+# Chemin vers la clé SSH publique
+variable "ssh_public_key_path" {
+  type        = string
+  description = "Chemin vers la clé SSH publique pour l'accès à la VM (~/.ssh/id_rsa.pub)"
+}

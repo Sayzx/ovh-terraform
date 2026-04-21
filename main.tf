@@ -1,88 +1,176 @@
 terraform {
   required_providers {
-    ovh = {
-      source  = "ovh/ovh"
-      version = "~> 0.40"
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
     }
   }
 }
 
-provider "ovh" {
-  endpoint           = "ovh-eu"
-  application_key    = var.ovh_application_key
-  application_secret = var.ovh_application_secret
-  consumer_key       = var.ovh_consumer_key
+provider "azurerm" {
+  features {}
+  
+  subscription_id = var.subscription_id
 }
 
-# NETWORK 
+# ========================================
+# INFRASTRUCTURE RÉSEAU
+# ========================================
 
-resource "ovh_cloud_project_network_private" "vpc" {
-  service_name = var.project_id
-  name         = "vpc-main"
-  regions      = ["GRA11"]
+# Resource Group
+resource "azurerm_resource_group" "rg" {
+  name     = "rg-main"
+  location = var.azure_region
 }
 
-resource "ovh_cloud_project_network_private_subnet" "subnet" {
-  service_name = var.project_id
-  network_id   = ovh_cloud_project_network_private.vpc.id
-
-  region  = "GRA11"
-  network = "10.0.1.0/24"
-  start   = "10.0.1.0/24"
-  dhcp    = true
+# Virtual Network (VNet)
+resource "azurerm_virtual_network" "vnet" {
+  name                = "vnet-main"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 }
 
-# SECURITY GROUP
-
-resource "ovh_cloud_project_security_group" "sg" {
-  service_name = var.project_id
-  name         = "web-sg"
-  description  = "Allow SSH and HTTP"
+# Subnet dans le VNet
+resource "azurerm_subnet" "subnet" {
+  name                 = "subnet-main"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
 }
 
-resource "ovh_cloud_project_security_group_rule" "ssh" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
+# ========================================
+# GROUPE DE SÉCURITÉ (Network Security Group)
+# ========================================
 
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "22"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+# Network Security Group pour SSH et HTTP
+resource "azurerm_network_security_group" "nsg" {
+  name                = "nsg-web"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 }
 
-resource "ovh_cloud_project_security_group_rule" "http" {
-  service_name        = var.project_id
-  security_group_id   = ovh_cloud_project_security_group.sg.id
-
-  direction = "ingress"
-  protocol  = "tcp"
-  port_range = "80"
-  ethertype  = "IPv4"
-  remote     = "0.0.0.0/0"
+# Règle NSG pour SSH depuis anywhere (à restreindre en prod)
+resource "azurerm_network_security_rule" "ssh" {
+  name                        = "AllowSSH"
+  priority                    = 1001
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.rg.name
+  network_security_group_name = azurerm_network_security_group.nsg.name
 }
 
+# Règle NSG pour HTTP
+resource "azurerm_network_security_rule" "http" {
+  name                        = "AllowHTTP"
+  priority                    = 1002
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "80"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = azurerm_resource_group.rg.name
+  network_security_group_name = azurerm_network_security_group.nsg.name
+}
 
-# INSTANCE (EC2 équivalent)
+# ========================================
+# INTERFACE RÉSEAU
+# ========================================
 
-resource "ovh_cloud_project_instance" "vm" {
-  service_name = var.project_id
+# Network Interface Card
+resource "azurerm_network_interface" "nic" {
+  name                = "nic-main"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
 
-  name        = "sayzx-vm-debian"
-  region      = "GRA11"
-  flavor_name = "d2-2"
-  image_name  = "Debian 12"
+  ip_configuration {
+    name                          = "testconfiguration1"
+    subnet_id                     = azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.pip.id
+  }
+}
 
-  security_groups = [
-    ovh_cloud_project_security_group.sg.name
+# Association NSG à la NIC
+resource "azurerm_network_interface_security_group_association" "nic_nsg" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
+
+# ========================================
+# ADRESSE IP PUBLIQUE
+# ========================================
+
+# Public IP
+resource "azurerm_public_ip" "pip" {
+  name                = "pip-main"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+# ========================================
+# MACHINE VIRTUELLE
+# ========================================
+
+# VM Debian 12 avec 2 vCPU et 2GB RAM
+resource "azurerm_linux_virtual_machine" "vm" {
+  name                = "sayzx-vm-debian"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  size                = "Standard_B2s" # 2 vCPU, 4 GB RAM
+
+  admin_username = "azureuser"
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file(var.ssh_public_key_path)
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Premium_LRS"
+  }
+
+  source_image_reference {
+    publisher = "debian"
+    offer     = "debian-12"
+    sku       = "12"
+    version   = "latest"
+  }
+
+  network_interface_ids = [
+    azurerm_network_interface.nic.id,
   ]
 
-  ssh_key_name = var.ssh_key_name
+  tags = {
+    Name = "sayzx-vm-debian"
+  }
 }
 
-# PUBLIC IP
+# ========================================
+# OUTPUTS
+# ========================================
 
-resource "ovh_cloud_project_instance_ip" "ip" {
-  service_name = var.project_id
-  instance_id  = ovh_cloud_project_instance.vm.id
+output "instance_public_ip" {
+  value       = azurerm_public_ip.pip.ip_address
+  description = "IP publique de la VM Azure"
+}
+
+output "instance_id" {
+  value       = azurerm_linux_virtual_machine.vm.id
+  description = "ID de la VM Azure"
+}
+
+output "resource_group_name" {
+  value       = azurerm_resource_group.rg.name
+  description = "Nom du Resource Group"
 }
